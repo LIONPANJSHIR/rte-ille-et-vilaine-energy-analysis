@@ -164,3 +164,91 @@ def compare_file_schemas(
             print("Dtype differences :", row["dtype_differences"])
 
     return report_df
+
+
+# ============================================================
+# DATA QUALITY REPORT
+# ============================================================
+
+
+import pandas as pd
+
+
+def build_quality_report(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Rapport de qualité annuel comparatif par région.
+    """
+
+    data = df.assign(year=df["datetime"].dt.year).copy()
+
+    # Agrégation par région et année
+    report = (
+        data.groupby(["Périmètre", "year"])
+        .agg(
+            rows=("datetime", "size"),
+            datetime_missing=("datetime", lambda x: x.isna().sum()),
+            datetime_unique=("datetime", "nunique"),
+            datetime_min=("datetime", "min"),
+            datetime_max=("datetime", "max"),
+            consommation_missing=("Consommation", lambda x: x.isna().sum()),
+            consommation_valid=("Consommation", "count"),
+        )
+        .reset_index()
+    )
+
+    # Indicateurs dérivés
+    report["duplicate_datetime"] = report["rows"] - report["datetime_unique"]
+
+    report["expected_rows"] = report["year"].apply(
+        lambda year: (pd.Timestamp(year + 1, 1, 1) - pd.Timestamp(year, 1, 1)).days * 48
+    )
+
+    report["temporal_coverage_pct"] = (
+        report["datetime_unique"] / report["expected_rows"] * 100
+    ).round(2)
+
+    report["consommation_missing_pct"] = (
+        report["consommation_missing"] / report["rows"] * 100
+    ).round(2)
+
+    # Tableau comparatif
+    report = report.pivot_table(
+        index="year",
+        columns="Périmètre",
+        values=[
+            "rows",
+            "expected_rows",
+            "datetime_missing",
+            "datetime_unique",
+            "duplicate_datetime",
+            "temporal_coverage_pct",
+            "consommation_missing",
+            "consommation_missing_pct",
+            "consommation_valid",
+            "datetime_min",
+            "datetime_max",
+        ],
+        aggfunc="first",
+    )
+
+    # Régions en premier niveau
+    report = report.swaplevel(axis=1).sort_index(axis=1)
+
+    return report
+
+
+# ============================================================
+# DUPLICATE VALIDATION
+# ============================================================
+
+
+def validate_primary_key(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Detect duplicate region + datetime observations.
+    """
+
+    duplicates = df[
+        df.duplicated(subset=["datetime", "region"], keep=False)
+    ].sort_values(["region", "datetime"])
+
+    return duplicates
